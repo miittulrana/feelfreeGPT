@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../config/supabase';
 import { model } from '../../config/gemini';
-import { AI_PERSONA, EXPRESSIONS } from '../../config/aiPersona';
-import MessageBubble from './MessageBubble';
+import { AI_PERSONA } from '../../config/aiPersona';
 import { useChat } from '../../context/ChatContext';
+import MessageBubble from './MessageBubble';
 
 const ChatInterface = () => {
   const [input, setInput] = useState('');
@@ -19,8 +19,7 @@ const ChatInterface = () => {
     setLoading,
     error,
     setError,
-    currentSession,
-    setCurrentSession
+    userPreferences
   } = useChat();
 
   const scrollToBottom = () => {
@@ -32,163 +31,89 @@ const ChatInterface = () => {
   }, [messages]);
 
   useEffect(() => {
-    const setupChat = async () => {
-      await initializeChat();
-      await loadMessages();
-      inputRef.current?.focus();
-    };
-    
-    setupChat();
-    
-    return () => {
-      chatRef.current = null;
-    };
-  }, []);
+    const initChat = async () => {
+      try {
+        if (!userPreferences) {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) throw new Error('No user found');
 
-  const initializeChat = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('No user found');
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .single();
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('preferences')
-        .eq('id', user.id)
-        .single();
-
-      chatRef.current = model.startChat({
-        generationConfig: {
-          temperature: 0.8,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 1024,
+          if (profile?.user_preferences) {
+            const aiPersona = AI_PERSONA(profile.user_preferences);
+            chatRef.current = model.startChat({
+              history: messages.map(msg => ({
+                role: msg.role === 'user' ? 'user' : 'model',
+                parts: msg.content,
+              })),
+              generationConfig: {
+                temperature: aiPersona.temperature,
+                topK: aiPersona.topK,
+                topP: aiPersona.topP,
+                maxOutputTokens: aiPersona.maxOutputTokens,
+              },
+            });
+          }
+        } else {
+          const aiPersona = AI_PERSONA(userPreferences);
+          chatRef.current = model.startChat({
+            history: messages.map(msg => ({
+              role: msg.role === 'user' ? 'user' : 'model',
+              parts: msg.content,
+            })),
+            generationConfig: {
+              temperature: aiPersona.temperature,
+              topK: aiPersona.topK,
+              topP: aiPersona.topP,
+              maxOutputTokens: aiPersona.maxOutputTokens,
+            },
+          });
         }
-      });
-      
-      // Set initial persona and context
-      const contextPrompt = `${AI_PERSONA}
 
-User Profile:
-Name: ${profile?.preferences?.name || 'friend'}
-Gender: ${profile?.preferences?.gender || 'unspecified'}
-Age Group: ${profile?.preferences?.age || 'young'}
-Current Mood: ${profile?.preferences?.feeling || 'neutral'}
-
-IMPORTANT INSTRUCTIONS:
-1. Always maintain Hinglish conversation style
-2. Keep responses short and natural
-3. Show genuine care and understanding
-4. Use casual, friendly language
-5. Respond like a real Indian friend texting
-
-Start with a warm, natural greeting in Hinglish style!`;
-
-      const result = await chatRef.current.sendMessage(contextPrompt);
-      await result.response;
-
-      // Set initial greeting if no messages
-      if (messages.length === 0) {
-        setMessages([{
-          role: 'assistant',
-          content: "Arey yaar! Finally mil gaye! Batao kya chal raha hai life mein? 🤗",
-          timestamp: new Date().toISOString()
-        }]);
+        inputRef.current?.focus();
+      } catch (error) {
+        console.error('Chat initialization error:', error);
+        setError('Failed to initialize chat. Please refresh the page.');
       }
-    } catch (error) {
-      console.error('Chat initialization error:', error);
-      setError('Connection issue! Please refresh karo...');
-    }
-  };
+    };
 
-  const loadMessages = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data, error } = await supabase
-        .from('conversations')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('last_updated', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error && error.code !== 'PGRST116') {
-        throw error;
-      }
-
-      if (data?.messages?.length) {
-        setMessages(data.messages);
-        setCurrentSession(data.id);
-      }
-    } catch (error) {
-      console.error('Error loading messages:', error);
-    }
-  };
-
-  const saveMessages = async (newMessages) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const conversationData = {
-        user_id: user.id,
-        messages: newMessages,
-        last_updated: new Date().toISOString()
-      };
-
-      if (currentSession) {
-        conversationData.id = currentSession;
-      }
-
-      const { error } = await supabase
-        .from('conversations')
-        .upsert(conversationData);
-
-      if (error) throw error;
-    } catch (error) {
-      console.error('Error saving messages:', error);
-    }
-  };
-
-  const simulateTyping = async (messageLength) => {
-    setIsTyping(true);
-    // Calculate typing duration based on message length
-    const baseDelay = 1000;
-    const charDelay = 25;
-    const randomVariation = Math.random() * 1000;
-    const typingDuration = baseDelay + (messageLength * charDelay) + randomVariation;
-    await new Promise(resolve => setTimeout(resolve, Math.min(typingDuration, 4000)));
-    setIsTyping(false);
-  };
+    initChat();
+  }, [userPreferences, messages, setError]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     const trimmedInput = input.trim();
     if (!trimmedInput || loading) return;
 
-    const userMessage = {
-      role: 'user',
-      content: trimmedInput,
-      timestamp: new Date().toISOString()
-    };
-
     try {
       setLoading(true);
       setError(null);
       setInput('');
-      inputRef.current?.focus();
-      
+
+      const userMessage = {
+        role: 'user',
+        content: trimmedInput,
+        timestamp: new Date().toISOString()
+      };
+
       const updatedMessages = [...messages, userMessage];
       setMessages(updatedMessages);
 
+      setIsTyping(true);
+      await new Promise(resolve => setTimeout(resolve, Math.min(trimmedInput.length * 20, 2000)));
+
       if (!chatRef.current) {
-        await initializeChat();
+        throw new Error('Chat not initialized');
       }
 
-      await simulateTyping(trimmedInput.length);
-
-      const result = await chatRef.current.sendMessage(trimmedInput);
+      const aiPersona = AI_PERSONA(userPreferences || {});
+      const prompt = `${aiPersona.prompt}\n\nUser message: ${trimmedInput}\n\nRespond naturally as a friend:`;
+      
+      const result = await chatRef.current.sendMessage(prompt);
       const response = await result.response;
       const text = response.text();
 
@@ -198,15 +123,13 @@ Start with a warm, natural greeting in Hinglish style!`;
         timestamp: new Date().toISOString()
       };
 
-      const finalMessages = [...updatedMessages, aiMessage];
-      setMessages(finalMessages);
-      await saveMessages(finalMessages);
+      setMessages([...updatedMessages, aiMessage]);
 
     } catch (error) {
       console.error('Chat Error:', error);
-      setError('Oops! Kuch problem ho gaya. Try again?');
-      await initializeChat();
+      setError('Failed to send message. Please try again.');
     } finally {
+      setIsTyping(false);
       setLoading(false);
       inputRef.current?.focus();
     }
@@ -220,32 +143,30 @@ Start with a warm, natural greeting in Hinglish style!`;
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4">
-      <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
-        <div className="h-[80vh] flex flex-col">
-          {/* Messages Container */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+    <div id="chat-container">
+      <div id="chat-box">
+        <div id="chat-layout">
+          <div id="messages-container">
             {messages.map((message, index) => (
               <MessageBubble
                 key={`${message.timestamp}-${index}`}
                 message={message}
                 isUser={message.role === 'user'}
-                previousMessage={messages[index - 1]}
               />
             ))}
             
             {isTyping && (
-              <div className="flex items-center space-x-2 p-4">
-                <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce delay-100"></div>
-                  <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce delay-200"></div>
+              <div id="typing-indicator">
+                <div id="typing-dots">
+                  <div></div>
+                  <div></div>
+                  <div></div>
                 </div>
               </div>
             )}
             
             {error && (
-              <div className="text-red-500 text-center p-4 bg-red-50 rounded-lg">
+              <div id="error-message">
                 {error}
               </div>
             )}
@@ -253,29 +174,22 @@ Start with a warm, natural greeting in Hinglish style!`;
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Input Form */}
-          <form onSubmit={handleSubmit} className="border-t p-4 bg-gray-50">
-            <div className="flex space-x-4 items-end">
+          <form onSubmit={handleSubmit} id="chat-form">
+            <div id="input-container">
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder="Type your message..."
-                className="flex-1 p-4 border rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none bg-white"
-                style={{
-                  minHeight: '48px',
-                  maxHeight: '150px'
-                }}
+                id="chat-input"
                 rows={1}
                 disabled={loading}
               />
               <button
                 type="submit"
                 disabled={loading || !input.trim()}
-                className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-all
-                         focus:outline-none focus:ring-2 focus:ring-offset-2"
+                id="send-button"
               >
                 Send
               </button>

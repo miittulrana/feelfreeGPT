@@ -1,3 +1,4 @@
+// ErrorBoundary.jsx
 import React from 'react';
 
 class ErrorBoundary extends React.Component {
@@ -17,17 +18,17 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
-          <div className="text-center p-8 bg-white rounded-lg shadow-md">
-            <h2 className="text-xl font-semibold text-gray-800 mb-4">
+        <div id="error-boundary">
+          <div id="error-content">
+            <h2 id="error-title">
               Oops! Something went wrong
             </h2>
-            <p className="text-gray-600 mb-4">
+            <p id="error-message">
               Please try refreshing the page
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+              id="error-refresh-button"
             >
               Refresh Page
             </button>

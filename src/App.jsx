@@ -1,3 +1,4 @@
+// App.jsx
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { supabase } from './config/supabase';
@@ -9,72 +10,66 @@ import InitialQuestions from './components/onboarding/InitialQuestions';
 
 function App() {
   const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const clearExistingSessions = async () => {
+    const setupAuth = async () => {
       try {
-        localStorage.clear();
-        sessionStorage.clear();
-        await supabase.auth.signOut();
-        setSession(null);
-        setProfile(null);
+        // Get initial session
+        const { data: { session: initialSession } } = await supabase.auth.getSession();
+        setSession(initialSession);
+        
+        if (initialSession?.user?.id) {
+          await fetchProfile(initialSession.user.id);
+        } else {
+          setLoading(false);
+        }
+
+        // Listen for auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+          setSession(session);
+          if (session?.user?.id) {
+            await fetchProfile(session.user.id);
+          } else {
+            setProfile(null);
+            setLoading(false);
+          }
+        });
+
+        return () => subscription.unsubscribe();
       } catch (error) {
-        console.error('Error clearing sessions:', error);
+        console.error('Auth setup error:', error);
+        setLoading(false);
       }
     };
 
-    clearExistingSessions();
+    setupAuth();
   }, []);
 
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
-      console.log('Auth event:', event);
-      setSession(currentSession);
-      setLoading(false);
-    });
-
-    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
-      setSession(initialSession);
-      if (initialSession?.user?.id) {
-        supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', initialSession.user.id)
-          .single()
-          .then(({ data: profileData }) => {
-            setProfile(profileData);
-          });
-      }
-      setLoading(false);
-    });
-
-    return () => {
-      subscription?.unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (session?.user?.id) {
-      supabase
+  const fetchProfile = async (userId) => {
+    try {
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', session.user.id)
-        .single()
-        .then(({ data }) => {
-          setProfile(data);
-        });
+        .eq('id', userId)
+        .single();
+      
+      if (error) throw error;
+      setProfile(data);
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+      setProfile(null);
+    } finally {
+      setLoading(false);
     }
-  }, [session]);
+  };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center space-y-3">
-          <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-500 mx-auto"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
+      <div id="loading-container">
+        <div id="loading-spinner"></div>
+        <p>Loading...</p>
       </div>
     );
   }
@@ -86,36 +81,28 @@ function App() {
           <Routes>
             <Route
               path="/login"
-              element={
-                session ? <Navigate to="/" replace /> : <AuthForms />
-              }
+              element={session ? <Navigate to="/" /> : <AuthForms />}
             />
             
             <Route
               path="/onboarding"
               element={
-                !session ? (
-                  <Navigate to="/login" replace />
-                ) : (
-                  <InitialQuestions />
-                )
+                !session ? <Navigate to="/login" /> :
+                profile?.onboarding_completed ? <Navigate to="/" /> :
+                <InitialQuestions />
               }
             />
             
             <Route
               path="/"
               element={
-                !session ? (
-                  <Navigate to="/login" replace />
-                ) : !profile?.preferences ? (
-                  <Navigate to="/onboarding" replace />
-                ) : (
-                  <ChatInterface />
-                )
+                !session ? <Navigate to="/login" /> :
+                !profile?.onboarding_completed ? <Navigate to="/onboarding" /> :
+                <ChatInterface />
               }
             />
             
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </Layout>
       </ChatProvider>

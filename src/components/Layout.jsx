@@ -6,9 +6,9 @@ const Layout = ({ children }) => {
   const showNavbar = location.pathname !== '/login';
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div id="layout">
       {showNavbar && <Navbar />}
-      <main className="container mx-auto px-4 py-8">{children}</main>
+      <main id="main-content">{children}</main>
     </div>
   );
 };
